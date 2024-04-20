@@ -1,168 +1,173 @@
 import socket
 import pygame
 import numpy as np
-import threading
 import struct
 import math
 import time
-import threading
 import multiprocessing
+from multiprocessing.shared_memory import SharedMemory
 
 width = 640
 height = 480
 
 # must be divisible into width & height respectively
-chunkwidth = 32
-chunkheight = 24
+chunk_width = 32
+chunk_height = 24
 
-chunksize = chunkwidth * chunkheight
+chunk_size = chunk_width * chunk_height
 
 fps = 60
 
 IP = "127.0.0.1"
-PORT = 5015
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
-sock.bind((IP, PORT))
-
-imageData = np.zeros((width,height,3))
-
-# manager = multiprocessing.Manager()
-# imageData = manager.list(np.zeros((width,height,3)))
+PORT = 5010
 
 # Buffer size
-N = 300 #round(width * height / chunksize / 2)
+N = 400
 # Buffer init
-buf = [0] * N
+buf: list[bytes] = [bytes(0)] * N
 front = 0
 rear = 0
 
-fill_count = threading.Semaphore(0)
-empty_count = threading.Semaphore(N)
 
-def enqueue(v):
-    global front
-    if empty_count._value == 0:
-        return # don't lock up
-    empty_count.acquire()
-    buf[front] = v
-    fill_count.release()
-    front = (front + 1) % N
-
-def dequeue():
-    global rear
-    fill_count.acquire()
-    v = buf[rear]
-    empty_count.release()
-    rear = (rear + 1) % N
-    return v
-
-running = True
-
-def getChunkPos(chunkn):
-    chunksperrow = width / chunkwidth
-    row = math.floor(chunkn / chunksperrow)
-    y = row * chunkheight
-    x = round((chunkn - (row * chunksperrow)) * chunkwidth)
+def get_chunk_pos(n):
+    chunks_per_row = width / chunk_width
+    row = math.floor(n / chunks_per_row)
+    y = row * chunk_height
+    x = round((n - (row * chunks_per_row)) * chunk_width)
     return x, y
 
 
-def getOffsetIntoChunk(x, y, idx):
-    dy = math.floor(idx / chunkwidth)
-    dx = idx % chunkwidth
+def get_offset_into_chunk(x, y, idx):
+    dy = math.floor(idx / chunk_width)
+    dx = idx % chunk_width
     return x + dx, y + dy
 
-def getPos(chunkn, dx) -> tuple[int,int]:
-    cx, cy = getChunkPos(chunkn)
-    return getOffsetIntoChunk(cx, cy, dx)
 
-def decodeData(line: bytes):
-    rgbline = []
-    chunkn = struct.unpack("!I", line[0:4])[0]
+def get_pos(n, dx) -> tuple[int, int]:
+    cx, cy = get_chunk_pos(n)
+    return get_offset_into_chunk(cx, cy, dx)
+
+
+def decode_data(line: bytes):
+    rgb_line = []
+    n = struct.unpack("!I", line[0:4])[0]
     for i in range(4, len(line), 3):
-        colorbytes = line[i:i+3]
-        if len(colorbytes) < 3:
+        color_bytes = line[i:i + 3]
+        if len(color_bytes) < 3:
             break
-        tuple_data = struct.unpack('!BBB', colorbytes)
-        rgbline.append(tuple_data)
-    return (chunkn, rgbline)
+        tuple_data = struct.unpack('!BBB', color_bytes)
+        for c in tuple_data:
+            rgb_line.append(c)
+    return n, rgb_line
 
-def process_result(result):
-    chunkn, rgbline = result
-    x, y = getChunkPos(chunkn)
-    chunk = []
-    for line in range(0, chunkheight):
-        chunkpart = rgbline[chunkwidth * line : chunkwidth * (line + 1)]
-        chunk.append(chunkpart)
-    imageData[x:x+chunkwidth,y:y+chunkheight] = np.transpose(chunk, (1, 0, 2))
-    # for i in range(0, len(rgbline)):
-    #     x, y = getPos(chunkn, i)
-    #     imageData[x][y] = rgbline[i]
 
-def applyDeltas():
-    arr = []
-    while fill_count._value > 0:
-        data = dequeue()
-        arr.append(data)
-    if len(arr) == 0:
-        return
-    # for v in arr:
-    #     decodeData(v)
-    pool = multiprocessing.Pool(50)
-    results = pool.map(decodeData, arr)
-    for result in results:
-        process_result(result)
+def process_result(result, image_data: SharedMemory):
+    n, rgb_line = result
+    x, y = get_chunk_pos(n)
+    for line in range(0, chunk_height):
+        part = rgb_line[chunk_width * line * 3: chunk_width * (line + 1) * 3]
+        line_y = y + line
+        image_data.buf[(x + (line_y * width)) * 3: (x + (line_y * width) + chunk_width) * 3] = bytearray(part)
+
+
+total_chunks = 0
+total_chunk_time = 0
+
+
+def process_decode(b: bytes, image_data: SharedMemory):
+    global total_chunks
+    global total_chunk_time
+    start_time = time.time()
+    result = decode_data(b)
+    decode_time = time.time()
+    process_result(result, image_data)
+    process_time = time.time()
+    decoding_time = decode_time - start_time
+    processing_time = process_time - decode_time
+    total_chunks += 1
+    total_chunk_time += decoding_time + processing_time
+
+
+def decoder(image_data: SharedMemory, data_queue: multiprocessing.Queue):
+    global total_chunks
+    global total_chunk_time
+
+    while True:
+        start_time = time.time()
+        result = decode_data(data_queue.get())
+        decode_time = time.time()
+        process_result(result, image_data)
+        process_time = time.time()
+        decoding_time = decode_time - start_time
+        processing_time = process_time - decode_time
+        total_chunks += 1
+        total_chunk_time += decoding_time + processing_time
+        print("\nDecode %fs, process %fs, average %fs" % (decoding_time, processing_time,
+                                                          total_chunk_time / total_chunks), end="")
     # expandImage()
 
-def decoder():
-    while True:
-        applyDeltas()
 
-def renderer():
+def expand_image(image_data: SharedMemory):
+    image = np.ndarray((height, width, 3), buffer=image_data.buf, dtype="b")
+    return image.transpose((1, 0, 2))
+
+
+def renderer(image_data: SharedMemory):
     pygame.init()
-    screen = pygame.display.set_mode((width,height))
-    pygame.display.set_caption("Video Reciever")
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption("Video Receiver")
     clock = pygame.time.Clock()
-    global running
+    running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
                 break
         screen.fill((255, 255, 255))
-        surface = pygame.surfarray.make_surface(imageData)
+        image_array = expand_image(image_data)
+        surface = pygame.surfarray.make_surface(image_array)
         screen.blit(surface, (0, 0))
         pygame.display.flip()
         clock.tick(fps)
     pygame.quit()
 
-def reciever():
-    # sock.listen()
-    # conn, addr = sock.accept()
-    global running
-    try:
-        while running:
-            data, addr = sock.recvfrom(4092)
-            enqueue(data)
-            # data = conn.recv(4092)
-    except Exception as e:
-        print(e)
-        running = False
+
+def receiver(data_queue: multiprocessing.Queue):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
+    sock.bind((IP, PORT))
+    while True:
+        try:
+            data, address = sock.recvfrom(4092)
+            data_queue.put(data)
+        except TimeoutError:
+            pass
+        except KeyboardInterrupt:
+            break
     sock.close()
     sock.shutdown(socket.SHUT_RD)
 
 
+def main():
+    manager = multiprocessing.Manager()
+    # np.zeros((width, height, 3))
+    image_data: SharedMemory = SharedMemory(size=width * height * 3, create=True)  # flat RGB array
+    data_queue = manager.Queue()
+
+    p_renderer = multiprocessing.Process(target=renderer, args=[image_data])
+    p_decoder = multiprocessing.Process(target=decoder, args=(image_data, data_queue))
+    p_receiver = multiprocessing.Process(target=receiver, args=[data_queue])
+
+    p_renderer.start()
+    p_decoder.start()
+    p_receiver.start()
+
+    p_renderer.join()
+    p_decoder.join()
+    p_receiver.join()
+
+    image_data.unlink()
+    image_data.close()
+
+
 if __name__ == "__main__":
-    try:
-        t1 = threading.Thread(target=renderer)
-        t2 = threading.Thread(target=reciever)
-        t3 = threading.Thread(target=decoder)
-        t1.start()
-        t2.start()
-        t3.start()
-        t1.join()
-        sock.shutdown(socket.SHUT_RD)
-        t2.join()
-        t3.join()
-    except:
-        sock.close()
+    main()
