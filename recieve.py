@@ -16,13 +16,15 @@ chunk_height = 24
 
 chunk_size = chunk_width * chunk_height
 
-fps = 60
+fps = 30
+
+n_decoders = 5
 
 IP = "127.0.0.1"
 PORT = 5010
 
 # Buffer size
-N = 400
+N = 800
 # Buffer init
 buf: list[bytes] = [bytes(0)] * N
 front = 0
@@ -152,18 +154,23 @@ def main():
     # np.zeros((width, height, 3))
     image_data: SharedMemory = SharedMemory(size=width * height * 3, create=True)  # flat RGB array
     data_queue = manager.Queue()
-
     p_renderer = multiprocessing.Process(target=renderer, args=[image_data])
-    p_decoder = multiprocessing.Process(target=decoder, args=(image_data, data_queue))
     p_receiver = multiprocessing.Process(target=receiver, args=[data_queue])
 
+    p_decoders = []
+    for i in range(n_decoders):
+        p_decoders.append(multiprocessing.Process(target=decoder, args=(image_data, data_queue)))
+        p_decoders[i].start()
+
     p_renderer.start()
-    p_decoder.start()
     p_receiver.start()
 
     p_renderer.join()
-    p_decoder.join()
+    p_receiver.terminate()
     p_receiver.join()
+    for dec in p_decoders:
+        dec.terminate()
+        dec.join()
 
     image_data.unlink()
     image_data.close()
