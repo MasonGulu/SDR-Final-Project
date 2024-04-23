@@ -55,12 +55,11 @@ sockaddr_in addr{};
 }
 int decoded_packets = 0;
 int bad_packets = 0;
-Mat received_image(HEIGHT, WIDTH, CV_8UC3);
+Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
 [[noreturn]] void* decode(void*) {
   while (true) {
     Packet p = dequeue();
     int n = p.n;
-    printf("Receiving %d\n", n);
     if (calc_sum(p) != p.sum) {
       bad_packets++;
       continue;
@@ -69,7 +68,7 @@ Mat received_image(HEIGHT, WIDTH, CV_8UC3);
     int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
     for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
       for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < received_image.elemSize(); i++) {
           received_image.data[sx+dx + ((sy+ dy) * WIDTH) + i * WIDTH * HEIGHT] = p.data[dx + (dy * PACKET_WIDTH) + i * PACKET_WIDTH * PACKET_HEIGHT];
         }
       }

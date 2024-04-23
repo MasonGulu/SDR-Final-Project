@@ -9,7 +9,11 @@
 #define HEIGHT 720
 #define PACKET_WIDTH 20
 #define PACKET_HEIGHT 20
-#define KEY_FRAME 30
+#define KEY_FRAME 10
+
+#define IMAGE_TYPE CV_8UC3
+//#define CONVERT_FROM_RGB
+const int IMAGE_CONVERT = cv::COLOR_RGB2GRAY;
 
 const int PACKETS_WIDE = WIDTH / PACKET_WIDTH;
 
