@@ -46,7 +46,7 @@ sockaddr_in addr{};
   Packet p{};
   struct sockaddr_in client_address{};
   socklen_t addr_len = sizeof(client_address);
-  while (true) { // TODO change to receiving
+  while (true) {
 //    read(socket_handle, buffer, 2048);
     recvfrom(socket_handle, &p, sizeof(p), 0, (struct sockaddr*)&client_address, &addr_len);
     enqueue(p);
@@ -55,7 +55,7 @@ sockaddr_in addr{};
 }
 int decoded_packets = 0;
 int bad_packets = 0;
-Mat received_image(HEIGHT, WIDTH, CV_8UC4);
+Mat received_image(HEIGHT, WIDTH, CV_8UC3);
 [[noreturn]] void* decode(void*) {
   while (true) {
     Packet p = dequeue();
@@ -69,7 +69,7 @@ Mat received_image(HEIGHT, WIDTH, CV_8UC4);
     int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
     for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
       for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 3; i++) {
           received_image.data[sx+dx + ((sy+ dy) * WIDTH) + i * WIDTH * HEIGHT] = p.data[dx + (dy * PACKET_WIDTH) + i * PACKET_WIDTH * PACKET_HEIGHT];
         }
       }

@@ -4,17 +4,18 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 
-#define FPS 60
-#define WIDTH 640
-#define HEIGHT 480
-#define PACKET_WIDTH 16
+#define FPS 30
+#define WIDTH 1080
+#define HEIGHT 720
+#define PACKET_WIDTH 20
 #define PACKET_HEIGHT 20
-#define KEY_FRAME 10
+#define KEY_FRAME 30
 
 const int PACKETS_WIDE = WIDTH / PACKET_WIDTH;
 
 #define PORT 1032
 
+// PACKET_SIZE * 3 MUST be < 1400 bytes
 const int PACKET_SIZE = PACKET_WIDTH * PACKET_HEIGHT;
 const int PACKETS = (WIDTH * HEIGHT) / PACKET_SIZE;
 
