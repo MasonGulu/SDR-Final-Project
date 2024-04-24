@@ -70,19 +70,57 @@ Packet dequeue() {
   return p;
 }
 
-bool eq(const cv::Mat& in1, const cv::Mat& in2) {
-  for (int i = 0; i < in1.elemSize() * in1.elemSize1(); i++) {
-    if (in1.data[i] != in2.data[i]) return false;
+bool eq(const cv::Mat& a, const cv::Mat& b, int n) {
+//  if (in1.size() != in2.size() || in1.type() != in2.type()) {
+//    return false; // Check sizes and types first
+//  }
+
+//  for (int i = 0; i < in1.total() * in1.elemSize(); i += (int) in1.elemSize1()) {
+//    if (in1.data[i] != in2.data[i]) {
+//      return false; // Return false if any pixel differs
+//    }
+//  }
+//  return true; // All pixels are equal
+
+
+//  Mat eq = in1 == in2;
+//  for (int i = 0; eq.total() * eq.elemSize(); i++) {
+//    if (eq.data[i] != 255) {
+//        return false;
+//    }
+//  }
+
+//  if ( (a.rows != b.rows) || (a.cols != b.cols) )
+//    return false;
+//  Scalar s = sum( a - b );
+//  return (s[0]==0) && (s[1]==0) && (s[2]==0);
+
+  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
+  for (int i = 0; i < a.elemSize(); i++) {
+    int plane = i * WIDTH * HEIGHT;
+    for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+      int y = (sy + dy) * WIDTH;
+      for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+        int x = sx + dx;
+        int ad = a.data[x + y + plane];
+        int bd = b.data[x + y + plane];
+        if (ad != bd) return false;
+      }
+    }
   }
+
   return true;
 }
+
+#ifdef DEBUG_SEND
+Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
+#endif
 
 int frame = 0;
 int new_packets = 0;
 Mat last_img;
 void transmit(const Mat& img) {
-  Mat subsection;
-  Mat last_subsection;
   new_packets = 0;
   for (int n = 0; n < PACKETS; n++) {
     struct Packet p{};
@@ -90,13 +128,15 @@ void transmit(const Mat& img) {
     int x, y;
     y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
     x = (n % PACKETS_WIDE) * PACKET_WIDTH;
-    subsection = img(Rect(x, y, PACKET_WIDTH, PACKET_HEIGHT));
-    last_subsection = Mat(last_img, Rect(x, y, PACKET_WIDTH, PACKET_HEIGHT));
-    if (frame % KEY_FRAME == 0 || !eq(subsection, last_subsection)) {
+    if (frame % KEY_FRAME == 0 || !eq(img, last_img, n)) {
+    for (int i = 0; i < img.elemSize(); i++) {
+      int pi = i * PACKET_WIDTH * PACKET_HEIGHT;
+      int ii = i * WIDTH * HEIGHT;
       for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+        int py = dy * PACKET_WIDTH;
+        int iy = (y + dy) * WIDTH;
         for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-          for (int i = 0; i < img.elemSize(); i++) {
-            p.data[dx + (dy * PACKET_WIDTH) + i * PACKET_WIDTH * PACKET_HEIGHT] = img.data[x+dx + ((y+ dy) * WIDTH) + i * WIDTH * HEIGHT];
+            p.data[dx + py + pi] = img.data[x+dx + iy + ii];
           }
         }
       }
@@ -113,6 +153,9 @@ sockaddr_in addr{};
 [[noreturn]] void* stream(void*) {
   while (true) {
     Packet p = dequeue();
+#ifdef DEBUG_SEND
+    decode_packet(p, received_image);
+#endif
 //    send(socket_handle, &p, sizeof(p), 0);
     if(sendto(socket_handle, &p, sizeof(p), MSG_CONFIRM, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
       perror("Sendto failed!");
@@ -135,7 +178,7 @@ int select_frame_source(char c) {
       break;
     case 'v':
       device.release();
-      device = VideoCapture("/home/mason/Documents/SDR Final Project/Breaking Bad - This Is Not Meth (S1E6) Rotten Tomatoes TV.mp4");
+      device = VideoCapture("/home/mason/Music/output.mp4");
       get_frame = get_video;
       break;
     default:
@@ -144,6 +187,9 @@ int select_frame_source(char c) {
   return 0;
 }
 
+GraphElement fps_graph(10, 70, Vec3b(255, 0, 0), "FPS");
+GraphElement queued_graph(10, 70 + GRAPH_HEIGHT + 40, Vec3b(255, 0, 0), "Queued Packets");
+GraphElement new_graph(10, 70 + (GRAPH_HEIGHT + 40) * 2, Vec3b(0, 255, 0), "New Packets");
 void run() {
 
   bool running = true;
@@ -159,7 +205,11 @@ void run() {
   double locked_fps;
 
   namedWindow("Send Image", WINDOW_AUTOSIZE );
+#ifdef DEBUG_SEND
+  namedWindow("Transmitted Image", WINDOW_AUTOSIZE);
+#endif
 
+  bool show_info = true;
   while (running) {
     auto start = high_resolution_clock::now();
     get_frame(image);
@@ -170,18 +220,24 @@ void run() {
 #endif
     display_image = transmit_image.clone();
 
-    String fps_count = string_format("Unlocked: %.2f fps", fps);
-    String locked_fps_count = string_format("Locked: %.2f fps", locked_fps);
-    text(display_image, fps_count, Point(10, 30), 0.5);
-    text(display_image, locked_fps_count, Point(10, 60), 0.5);
-    int queued_packets;
-    if (sem_getvalue(&filled,&queued_packets) != 0) {
-      perror("Failed to get queued packet count!");
+    if (show_info) {
+      text(display_image, "[c/d/v] Source, [i] Toggle Overlay", Point(10, 30), 0.5);
+      int queued_packets;
+      if (sem_getvalue(&filled,&queued_packets) != 0) {
+        perror("Failed to get queued packet count!");
+      }
+      fps_graph.queue(locked_fps);
+      fps_graph.draw(display_image);
+      queued_graph.queue(queued_packets);
+      queued_graph.draw(display_image);
+      new_graph.queue(new_packets);
+      new_graph.draw(display_image);
     }
-    String queued_packet_count = string_format("Packets: %d+%d", queued_packets, new_packets);
-    text(display_image, queued_packet_count, Point(10, 90), 0.5);
 
     imshow("Send Image", display_image);
+#ifdef DEBUG_SEND
+    imshow("Transmitted Image", received_image);
+#endif
 
     transmit(transmit_image);
 
@@ -194,6 +250,9 @@ void run() {
     if (delay_time < 1) delay_time = 1;
     char key = (char) waitKey(delay_time);
     select_frame_source(key);
+    if (key == 'i') {
+      show_info = !show_info;
+    }
 
     stop = high_resolution_clock::now();
     duration = static_cast<double>(duration_cast<microseconds>(stop - start).count());

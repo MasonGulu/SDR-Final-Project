@@ -1,9 +1,8 @@
 #include <cstdio>
 #include <opencv2/opencv.hpp>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <unistd.h>
 #include <chrono>
+#include <utility>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -59,23 +58,14 @@ Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
 [[noreturn]] void* decode(void*) {
   while (true) {
     Packet p = dequeue();
-    int n = p.n;
-    if (calc_sum(p) != p.sum) {
-      bad_packets++;
-      continue;
-    }
-    int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-    int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
-    for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
-      for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-        for (int i = 0; i < received_image.elemSize(); i++) {
-          received_image.data[sx+dx + ((sy+ dy) * WIDTH) + i * WIDTH * HEIGHT] = p.data[dx + (dy * PACKET_WIDTH) + i * PACKET_WIDTH * PACKET_HEIGHT];
-        }
-      }
-    }
+    decode_packet(p, received_image);
   }
 }
 
+
+GraphElement fps_graph(10, 70, Vec3b(255, 0, 0), "FPS");
+GraphElement queued_graph(10, 70 + GRAPH_HEIGHT + 40, Vec3b(255, 0, 0), "Queued Packets");
+GraphElement new_graph(10, 70 + (GRAPH_HEIGHT + 40) * 2, Vec3b(0, 255, 0), "New Packets");
 void run() {
   bool running = true;
   Mat display_image;
@@ -86,23 +76,30 @@ void run() {
 
   namedWindow("Receive Image", WINDOW_AUTOSIZE );
 
+  bool show_info = true;
   while (running) {
     auto start = high_resolution_clock::now();
     pthread_mutex_lock(&mutex);
     display_image = received_image.clone();
     pthread_mutex_unlock(&mutex);
 
-    String fps_count = string_format("Unlocked: %.2f fps", fps);
-    String locked_fps_count = string_format("Locked: %.2f fps", locked_fps);
-    text(display_image, fps_count, Point(10, 30), 0.5);
-    text(display_image, locked_fps_count, Point(10, 60), 0.5);
-    int queued_packets;
-    if (sem_getvalue(&filled,&queued_packets) != 0) {
-      perror("Failed to get queued packet count!");
+    if (show_info) {
+      text(display_image, "[i] Toggle Overlay", Point(10, 30), 0.5);
+      int queued_packets;
+      if (sem_getvalue(&filled,&queued_packets) != 0) {
+        perror("Failed to get queued packet count!");
+      }
+      fps_graph.queue(locked_fps);
+      fps_graph.draw(display_image);
+      queued_graph.queue(queued_packets);
+      queued_graph.draw(display_image);
+      new_graph.queue(received_packets);
+      new_graph.draw(display_image);
+//      String queued_packet_count = string_format("Packets: %3d+%3d-%3dB%3d",
+//                                                 queued_packets, received_packets, decoded_packets, bad_packets);
+//      text(display_image, queued_packet_count, Point(10, 90), 0.5);
+
     }
-    String queued_packet_count = string_format("Packets: %3d+%3d-%3dB%3d",
-                                               queued_packets, received_packets, decoded_packets, bad_packets);
-    text(display_image, queued_packet_count, Point(10, 90), 0.5);
 
     imshow("Receive Image", display_image);
     received_packets = decoded_packets = bad_packets = 0;
@@ -114,7 +111,10 @@ void run() {
 
     int delay_time = (1000 / FPS) - (int)frame_time_ms;
     if (delay_time < 1) delay_time = 1;
-    waitKey(delay_time);
+    char key = (char) waitKey(delay_time);
+    if (key == 'i') {
+      show_info = !show_info;
+    }
 
     stop = high_resolution_clock::now();
     duration = static_cast<double>(duration_cast<microseconds>(stop - start).count());

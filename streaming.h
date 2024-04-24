@@ -5,11 +5,13 @@
 #include <opencv2/opencv.hpp>
 
 #define FPS 30
-#define WIDTH 1080
+#define WIDTH 1280
 #define HEIGHT 720
 #define PACKET_WIDTH 20
 #define PACKET_HEIGHT 20
-#define KEY_FRAME 10
+#define KEY_FRAME 30
+
+//#define DEBUG_SEND
 
 #define IMAGE_TYPE CV_8UC3
 //#define CONVERT_FROM_RGB
@@ -54,5 +56,87 @@ int calc_sum(const Packet &p) {
   }
   return sum;
 }
+
+int decode_packet(const Packet &p, cv::Mat &image) {
+  int n = p.n;
+  if (calc_sum(p) != p.sum) {
+    return 1;
+  }
+  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
+  for (int i = 0; i < image.elemSize(); i++) {
+    for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+      for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+        image.data[sx + dx + ((sy + dy) * WIDTH) + i * WIDTH * HEIGHT] = p.data[dx + (dy * PACKET_WIDTH) +
+                                                                                i * PACKET_WIDTH * PACKET_HEIGHT];
+      }
+    }
+  }
+  return 0;
+}
+
+
+#define GRAPH_WIDTH 200
+#define GRAPH_HEIGHT 100
+
+using namespace cv;
+
+class GraphElement {
+    double values[GRAPH_WIDTH]{};
+    double average{};
+    int head = 0;
+    double max = 1;
+    int tail = 0;
+    int x, y;
+    Vec3b color;
+    std::string label;
+
+public:
+    explicit GraphElement(int x, int y, const Vec3b &color, std::string label) {
+      this->color = color;
+      this->x = x;
+      this->y = y;
+      this->label = std::move(label);
+    }
+    void draw(Mat &img) {
+      clear(img);
+      calc_max();
+      for (int i = 0; i < GRAPH_WIDTH - 1; i++) {
+        int idx = (tail + i) % GRAPH_WIDTH;
+        int n_idx = (idx + 1) % GRAPH_WIDTH;
+        Point p1 = Point(x + i, y + GRAPH_HEIGHT - normalize(idx));
+        Point p2 = Point(x + i + 1, y + GRAPH_HEIGHT - normalize(n_idx));
+        line(img, p1, p2, color, 1);
+      }
+      text(img, format("Max: %.2f", max), Point(x + GRAPH_WIDTH, y + 10), 0.5);
+      text(img, format("Mean: %.2f", average), Point(x + GRAPH_WIDTH, y + GRAPH_HEIGHT / 2), 0.5);
+      text(img, label, Point(x, y - 10), 0.5);
+    }
+    void queue(double value) {
+      values[head] = value;
+      head = (head + 1) % GRAPH_WIDTH;
+      if (head == tail) {
+        tail = (tail + 1) % GRAPH_WIDTH;
+      }
+    }
+
+private:
+    int normalize(int i) {
+      double value = values[i];
+      return (int) (value / (float) max * GRAPH_HEIGHT);
+    }
+    void calc_max() {
+      max = 0;
+      double sum = 0;
+      for (double i : values) {
+        if (i > max) max = i;
+        sum += i;
+      }
+      average = sum / GRAPH_WIDTH;
+    }
+    void clear(Mat &img) const {
+      rectangle(img, Rect(x, y, GRAPH_WIDTH, GRAPH_HEIGHT), Vec3b(0,0,0), FILLED);
+    }
+};
 
 #endif //SEND_STREAMING_H
