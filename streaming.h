@@ -4,13 +4,16 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 
-#define FPS 30
 #define WIDTH 1280
 #define HEIGHT 720
-#define PACKET_WIDTH 20
-#define PACKET_HEIGHT 20
-#define KEY_FRAME 30
+#define PACKET_WIDTH 10
+#define PACKET_HEIGHT 10
+#define KEY_FRAME 1000000
 
+int FPS = 30;
+int PORT = 1082;
+
+#define DEBUG_CHUNKS
 //#define DEBUG_SEND
 
 #define IMAGE_TYPE CV_8UC3
@@ -18,8 +21,6 @@
 const int IMAGE_CONVERT = cv::COLOR_RGB2GRAY;
 
 const int PACKETS_WIDE = WIDTH / PACKET_WIDTH;
-
-#define PORT 1032
 
 // PACKET_SIZE * 3 MUST be < 1400 bytes
 const int PACKET_SIZE = PACKET_WIDTH * PACKET_HEIGHT;
@@ -60,8 +61,9 @@ int calc_sum(const Packet &p) {
 int decode_packet(const Packet &p, cv::Mat &image) {
   int n = p.n;
   if (calc_sum(p) != p.sum) {
-    return 1;
+    return -1;
   }
+
   int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
   int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
   for (int i = 0; i < image.elemSize(); i++) {
@@ -72,12 +74,12 @@ int decode_packet(const Packet &p, cv::Mat &image) {
       }
     }
   }
-  return 0;
+  return n;
 }
 
 
 #define GRAPH_WIDTH 200
-#define GRAPH_HEIGHT 100
+#define GRAPH_HEIGHT 60
 
 using namespace cv;
 
@@ -103,9 +105,9 @@ public:
       calc_max();
       for (int i = 0; i < GRAPH_WIDTH - 1; i++) {
         int idx = (tail + i) % GRAPH_WIDTH;
-        int n_idx = (idx + 1) % GRAPH_WIDTH;
         Point p1 = Point(x + i, y + GRAPH_HEIGHT - normalize(idx));
-        Point p2 = Point(x + i + 1, y + GRAPH_HEIGHT - normalize(n_idx));
+        if (max == 0) p1.y = y + GRAPH_HEIGHT;
+        Point p2 = Point(x + i, y + GRAPH_HEIGHT);
         line(img, p1, p2, color, 1);
       }
       text(img, format("Max: %.2f", max), Point(x + GRAPH_WIDTH, y + 10), 0.5);

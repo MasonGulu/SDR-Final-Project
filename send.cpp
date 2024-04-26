@@ -10,41 +10,89 @@
 #include <semaphore.h>
 #include "streaming.h"
 #include <arpa/inet.h>
+#include "parser.h"
 
 using namespace cv;
 using namespace std::chrono;
 
+
 // https://stackoverflow.com/questions/24988164/c-fast-screenshots-in-linux-for-use-with-opencv
-int screenshot(Mat &image)
+class ScreenShot
 {
-  Display* display = XOpenDisplay(nullptr);
-  Window root = DefaultRootWindow(display);
+    Display* display;
+    Window root;
+    int x,y,width,height;
+    XImage* img{nullptr};
+public:
+    ScreenShot(int x, int y, int width, int height):
+            x(x),
+            y(y),
+            width(width),
+            height(height)
+    {
+      display = XOpenDisplay(nullptr);
+      root = DefaultRootWindow(display);
+    }
 
-  XWindowAttributes attributes = {0};
-  XGetWindowAttributes(display, root, &attributes);
+    void operator() (cv::Mat& cvImg)
+    {
+      if(img != nullptr)
+        XDestroyImage(img);
+      img = XGetImage(display, root, x, y, width, height, AllPlanes, ZPixmap);
+      Mat rawImg = cv::Mat(height, width, CV_8UC4, img->data);
+      cvtColor(rawImg, cvImg, COLOR_RGBA2RGB);
+    }
 
-  int width = attributes.width;
-  int height = attributes.height;
+    ~ScreenShot()
+    {
+      if(img != nullptr)
+        XDestroyImage(img);
+      XCloseDisplay(display);
+    }
+};
 
-  XImage* img = XGetImage(display, root, 0, 0 , width, height, AllPlanes, ZPixmap);
-  int bpp = img->bits_per_pixel;
-
-  Mat s_image(height, width, CV_8UC4);
-
-  memcpy(s_image.data, img->data, width * height * bpp / 8);
-
-  cvtColor(s_image, image, COLOR_RGBA2RGB);
-  XDestroyImage(img);
-  XCloseDisplay(display);
+ScreenShot screen(0,0,1920,1080);
+int screenshot(Mat &image) {
+  screen(image);
   return 0;
 }
 
+int get_video(Mat &image);
 VideoCapture device;
+std::string video_filename;
+int (*get_frame)(Mat&);
+// Returns -1 on error
+int select_frame_source(char c) {
+  switch(c) {
+    case 'c':
+      device.release();
+      device = VideoCapture(CAP_ANY);
+      get_frame = get_video;
+      break;
+    case 'd':
+      device.release();
+      get_frame = screenshot;
+      break;
+    case 'v':
+      device.release();
+      device = VideoCapture(video_filename);
+      get_frame = get_video;
+      break;
+    default:
+      return -1;
+  }
+  return 0;
+}
+
 // Returns -1 on failure
 int get_video(Mat &image) {
   if( !device.isOpened() )
     return 0;
   device >> image;
+  if (image.empty()) {
+    select_frame_source('v');
+    device >> image;
+  }
   return -1;
 }
 
@@ -70,82 +118,74 @@ Packet dequeue() {
   return p;
 }
 
-bool eq(const cv::Mat& a, const cv::Mat& b, int n) {
-//  if (in1.size() != in2.size() || in1.type() != in2.type()) {
-//    return false; // Check sizes and types first
-//  }
-
-//  for (int i = 0; i < in1.total() * in1.elemSize(); i += (int) in1.elemSize1()) {
-//    if (in1.data[i] != in2.data[i]) {
-//      return false; // Return false if any pixel differs
-//    }
-//  }
-//  return true; // All pixels are equal
-
-
-//  Mat eq = in1 == in2;
-//  for (int i = 0; eq.total() * eq.elemSize(); i++) {
-//    if (eq.data[i] != 255) {
-//        return false;
-//    }
-//  }
-
-//  if ( (a.rows != b.rows) || (a.cols != b.cols) )
-//    return false;
-//  Scalar s = sum( a - b );
-//  return (s[0]==0) && (s[1]==0) && (s[2]==0);
-
-  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
-  for (int i = 0; i < a.elemSize(); i++) {
-    int plane = i * WIDTH * HEIGHT;
-    for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
-      int y = (sy + dy) * WIDTH;
-      for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-        int x = sx + dx;
-        int ad = a.data[x + y + plane];
-        int bd = b.data[x + y + plane];
-        if (ad != bd) return false;
-      }
-    }
-  }
-
-  return true;
-}
-
 #ifdef DEBUG_SEND
 Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
 #endif
 
+
+#ifdef DEBUG_CHUNKS
+std::vector<int>updated_chunks;
+#endif
+Mat eqa(HEIGHT, WIDTH, CV_8UC1);
+Mat eqb(HEIGHT, WIDTH, CV_8UC1);
+// a and b should be in GRAY color mode
+bool eq(int n) {
+  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
+//  int diff = 0;
+  for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+    int y = (sy + dy) * WIDTH;
+    for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+      int x = sx + dx;
+      int ad = eqa.data[x + y];
+      int bd = eqb.data[x + y];
+      if (ad != bd) {
+//        diff++;
+        return false;
+      }
+    }
+  }
+
+//  return diff <= PACKET_WIDTH * PACKET_HEIGHT * 0;
+  return true;
+}
+
+
 int frame = 0;
 int new_packets = 0;
-Mat last_img;
 void transmit(const Mat& img) {
   new_packets = 0;
+#ifdef DEBUG_CHUNKS
+  updated_chunks.clear();
+#endif
+  cvtColor(img, eqa, COLOR_RGB2GRAY);
   for (int n = 0; n < PACKETS; n++) {
     struct Packet p{};
     p.n = n;
     int x, y;
     y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
     x = (n % PACKETS_WIDE) * PACKET_WIDTH;
-    if (frame % KEY_FRAME == 0 || !eq(img, last_img, n)) {
-    for (int i = 0; i < img.elemSize(); i++) {
-      int pi = i * PACKET_WIDTH * PACKET_HEIGHT;
-      int ii = i * WIDTH * HEIGHT;
-      for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
-        int py = dy * PACKET_WIDTH;
-        int iy = (y + dy) * WIDTH;
-        for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+    if (frame % KEY_FRAME == 0 || !eq(n)) {
+      for (int i = 0; i < img.elemSize(); i++) {
+        int pi = i * PACKET_WIDTH * PACKET_HEIGHT;
+        int ii = i * WIDTH * HEIGHT;
+        for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+          int py = dy * PACKET_WIDTH;
+          int iy = (y + dy) * WIDTH;
+          for (int dx = 0; dx < PACKET_WIDTH; dx++) {
             p.data[dx + py + pi] = img.data[x+dx + iy + ii];
           }
         }
+#ifdef DEBUG_CHUNKS
+        updated_chunks.push_back(n);
+#endif
       }
       p.sum = calc_sum(p);
       enqueue(p);
       new_packets++;
     }
   }
-  last_img = img.clone();
+  eqb = eqa.clone();
   frame++;
 }
 
@@ -163,31 +203,7 @@ sockaddr_in addr{};
   }
 }
 
-int (*get_frame)(Mat&);
-// Returns -1 on error
-int select_frame_source(char c) {
-  switch(c) {
-    case 'c':
-      device.release();
-      device = VideoCapture(CAP_ANY);
-      get_frame = get_video;
-      break;
-    case 'd':
-      device.release();
-      get_frame = screenshot;
-      break;
-    case 'v':
-      device.release();
-      device = VideoCapture("/home/mason/Music/output.mp4");
-      get_frame = get_video;
-      break;
-    default:
-      return -1;
-  }
-  return 0;
-}
-
-GraphElement fps_graph(10, 70, Vec3b(255, 0, 0), "FPS");
+GraphElement fps_graph(10, 70, Vec3b(0, 0, 255), "FPS");
 GraphElement queued_graph(10, 70 + GRAPH_HEIGHT + 40, Vec3b(255, 0, 0), "Queued Packets");
 GraphElement new_graph(10, 70 + (GRAPH_HEIGHT + 40) * 2, Vec3b(0, 255, 0), "New Packets");
 void run() {
@@ -198,7 +214,6 @@ void run() {
   Mat display_image;
 
   get_frame(image);
-  resize(image, last_img, Size(WIDTH, HEIGHT));
 
   double frame_time_ms;
   double fps;
@@ -220,20 +235,27 @@ void run() {
 #endif
     display_image = transmit_image.clone();
 
+    int queued_packets;
+    if (sem_getvalue(&filled,&queued_packets) != 0) {
+      perror("Failed to get queued packet count!");
+    }
+    fps_graph.queue(locked_fps);
+    queued_graph.queue(queued_packets);
+    new_graph.queue(new_packets);
     if (show_info) {
-      text(display_image, "[c/d/v] Source, [i] Toggle Overlay", Point(10, 30), 0.5);
-      int queued_packets;
-      if (sem_getvalue(&filled,&queued_packets) != 0) {
-        perror("Failed to get queued packet count!");
+#ifdef DEBUG_CHUNKS
+      for (int n : updated_chunks) {
+        int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+        int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+        rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
+                  Scalar(0, 255, 0));
       }
-      fps_graph.queue(locked_fps);
+#endif
+      text(display_image, "[c/d/v] Source, [i] Toggle Overlay", Point(10, 30), 0.5);
       fps_graph.draw(display_image);
-      queued_graph.queue(queued_packets);
       queued_graph.draw(display_image);
-      new_graph.queue(new_packets);
       new_graph.draw(display_image);
     }
-
     imshow("Send Image", display_image);
 #ifdef DEBUG_SEND
     imshow("Transmitted Image", received_image);
@@ -264,13 +286,26 @@ void run() {
 
 int main(int argc, char* argv[])
 {
-  if (argc != 2) {
-    printf("Usage: Send <c|d|v>\n");
-    select_frame_source('d');
-  } else if(select_frame_source(argv[1][0]) < 0) {
-    printf("Invalid parameter\n");
+  parser parser{};
+  parser.add_arg_pos("mode", "c|d|v", true);
+  parser.add_arg('v', "Video path", false);
+  parser.add_arg('p', "UDP Port", false, true);
+  parser.add_arg('f', "FPS", false, true);
+  if (parser.parse_args(argc, argv) < 0) {
     return 0;
   }
+  parser.get_string('v', video_filename);
+  std::string source;
+  if (parser.get_pos(0, source) == 0) {
+    if(select_frame_source(source[0]) < 0) {
+      printf("Invalid parameter\n");
+      return 0;
+    }
+  } else {
+    select_frame_source('d');
+  }
+  parser.get_int('p', PORT);
+  parser.get_int('f', FPS);
 
   sem_init(&filled, 0, 0);
   sem_init(&empty, 0, PACKETS);

@@ -4,9 +4,13 @@ find_package( OpenCV REQUIRED )
 find_package( X11 REQUIRED )
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 add_executable( Send send.cpp
-        streaming.h)
+        streaming.h
+        parser.cpp
+        parser.h)
 add_executable( Receive receive.cpp
-        streaming.h)
+        streaming.h
+        parser.cpp
+        parser.h)
 
 set(X11)
 link_directories( /usr/lib/X11 )

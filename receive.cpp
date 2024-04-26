@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include "streaming.h"
+#include "parser.h"
 
 
 using namespace cv;
@@ -52,20 +53,30 @@ sockaddr_in addr{};
     received_packets++;
   }
 }
+#ifdef DEBUG_CHUNKS
+std::vector<int>updated_chunks;
+#endif
+
 int decoded_packets = 0;
 int bad_packets = 0;
 Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
 [[noreturn]] void* decode(void*) {
   while (true) {
     Packet p = dequeue();
-    decode_packet(p, received_image);
+    int n = decode_packet(p, received_image);
+    if (n < 0) bad_packets++;
+#ifdef DEBUG_CHUNKS
+    if (n >= 0) updated_chunks.push_back(n);
+#endif
+    decoded_packets++;
   }
 }
 
 
-GraphElement fps_graph(10, 70, Vec3b(255, 0, 0), "FPS");
+GraphElement fps_graph(10, 70, Vec3b(0, 0, 255), "FPS");
 GraphElement queued_graph(10, 70 + GRAPH_HEIGHT + 40, Vec3b(255, 0, 0), "Queued Packets");
 GraphElement new_graph(10, 70 + (GRAPH_HEIGHT + 40) * 2, Vec3b(0, 255, 0), "New Packets");
+GraphElement bad_graph(10, 70 + (GRAPH_HEIGHT + 40) * 3, Vec3b(0, 0, 255), "Bad Packets");
 void run() {
   bool running = true;
   Mat display_image;
@@ -83,22 +94,29 @@ void run() {
     display_image = received_image.clone();
     pthread_mutex_unlock(&mutex);
 
+    int queued_packets;
+    if (sem_getvalue(&filled,&queued_packets) != 0) {
+      perror("Failed to get queued packet count!");
+    }
+    fps_graph.queue(locked_fps);
+    queued_graph.queue(queued_packets);
+    new_graph.queue(received_packets);
+    bad_graph.queue(bad_packets);
     if (show_info) {
-      text(display_image, "[i] Toggle Overlay", Point(10, 30), 0.5);
-      int queued_packets;
-      if (sem_getvalue(&filled,&queued_packets) != 0) {
-        perror("Failed to get queued packet count!");
+#ifdef DEBUG_CHUNKS
+      for (int n : updated_chunks) {
+        int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+        int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+        rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
+                  Scalar(0, 255, 0));
       }
-      fps_graph.queue(locked_fps);
+      updated_chunks.clear();
+#endif
+      text(display_image, "[i] Toggle Overlay", Point(10, 30), 0.5);
       fps_graph.draw(display_image);
-      queued_graph.queue(queued_packets);
       queued_graph.draw(display_image);
-      new_graph.queue(received_packets);
       new_graph.draw(display_image);
-//      String queued_packet_count = string_format("Packets: %3d+%3d-%3dB%3d",
-//                                                 queued_packets, received_packets, decoded_packets, bad_packets);
-//      text(display_image, queued_packet_count, Point(10, 90), 0.5);
-
+      bad_graph.draw(display_image);
     }
 
     imshow("Receive Image", display_image);
@@ -124,8 +142,17 @@ void run() {
   }
 }
 
-int main()
+int main(int argc, char** argv)
 {
+  parser parser{};
+  parser.add_arg('p', "UDP Port", false, true);
+  parser.add_arg('f', "FPS", false, true);
+
+  if (parser.parse_args(argc, argv) < 0) {
+    return 0;
+  }
+  parser.get_int('p', PORT);
+  parser.get_int('f', FPS);
 
   sem_init(&filled, 0, 0);
   sem_init(&empty, 0, PACKETS);
