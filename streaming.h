@@ -8,12 +8,12 @@
 #define HEIGHT 720
 #define PACKET_WIDTH 10
 #define PACKET_HEIGHT 10
-#define KEY_FRAME 1000000
+#define KEY_FRAME 3000
 
-int FPS = 30;
+int FPS = 120;
 int PORT = 1082;
 
-#define DEBUG_CHUNKS
+bool DEBUG_CHUNKS = true;
 //#define DEBUG_SEND
 
 #define IMAGE_TYPE CV_8UC3
@@ -43,6 +43,7 @@ void text(cv::Mat img, const std::string& text, cv::Point p, float scale) {
   putText(img, text, p, cv::FONT_HERSHEY_SIMPLEX, scale, CV_RGB(0, 0, 0), 2);
 }
 
+typedef cv::Point3_<uchar> Pixel;
 struct Packet {
     int n;
     uchar data[PACKET_SIZE * 4];
@@ -58,20 +59,27 @@ int calc_sum(const Packet &p) {
   return sum;
 }
 
+void get_packet_pos(int n, int &x, int &y) {
+  y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+  x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+}
+
 int decode_packet(const Packet &p, cv::Mat &image) {
   int n = p.n;
   if (calc_sum(p) != p.sum) {
     return -1;
   }
 
-  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
-  for (int i = 0; i < image.elemSize(); i++) {
-    for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
-      for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-        image.data[sx + dx + ((sy + dy) * WIDTH) + i * WIDTH * HEIGHT] = p.data[dx + (dy * PACKET_WIDTH) +
-                                                                                i * PACKET_WIDTH * PACKET_HEIGHT];
-      }
+  int sy, sx;
+  get_packet_pos(n, sx, sy);
+  for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+    for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+      Pixel pixel;
+      int py = dy * PACKET_WIDTH;
+      pixel.x = p.data[(dx + py)*3];
+      pixel.y = p.data[(dx + py)*3 + 1];
+      pixel.z = p.data[(dx + py)*3 + 2];
+      image.at<Pixel>(sy + dy, sx + dx) = pixel;
     }
   }
   return n;

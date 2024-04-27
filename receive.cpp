@@ -2,7 +2,6 @@
 #include <opencv2/opencv.hpp>
 #include <unistd.h>
 #include <chrono>
-#include <utility>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -53,9 +52,8 @@ sockaddr_in addr{};
     received_packets++;
   }
 }
-#ifdef DEBUG_CHUNKS
+
 std::vector<int>updated_chunks;
-#endif
 
 int decoded_packets = 0;
 int bad_packets = 0;
@@ -65,9 +63,7 @@ Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
     Packet p = dequeue();
     int n = decode_packet(p, received_image);
     if (n < 0) bad_packets++;
-#ifdef DEBUG_CHUNKS
     if (n >= 0) updated_chunks.push_back(n);
-#endif
     decoded_packets++;
   }
 }
@@ -103,16 +99,16 @@ void run() {
     new_graph.queue(received_packets);
     bad_graph.queue(bad_packets);
     if (show_info) {
-#ifdef DEBUG_CHUNKS
-      for (int n : updated_chunks) {
-        int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-        int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
-        rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
-                  Scalar(0, 255, 0));
+      if (DEBUG_CHUNKS) {
+        for (int n : updated_chunks) {
+          int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+          int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+          rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
+                    Scalar(0, 255, 0));
+        }
       }
       updated_chunks.clear();
-#endif
-      text(display_image, "[i] Toggle Overlay", Point(10, 30), 0.5);
+      text(display_image, "[i] Toggle Overlay, [o] Show Chunk Updates", Point(10, 30), 0.5);
       fps_graph.draw(display_image);
       queued_graph.draw(display_image);
       new_graph.draw(display_image);
@@ -132,6 +128,8 @@ void run() {
     char key = (char) waitKey(delay_time);
     if (key == 'i') {
       show_info = !show_info;
+    } else if (key == 'o') {
+      DEBUG_CHUNKS = !DEBUG_CHUNKS;
     }
 
     stop = high_resolution_clock::now();

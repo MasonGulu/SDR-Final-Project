@@ -123,15 +123,13 @@ Mat received_image(HEIGHT, WIDTH, IMAGE_TYPE);
 #endif
 
 
-#ifdef DEBUG_CHUNKS
 std::vector<int>updated_chunks;
-#endif
 Mat eqa(HEIGHT, WIDTH, CV_8UC1);
 Mat eqb(HEIGHT, WIDTH, CV_8UC1);
 // a and b should be in GRAY color mode
 bool eq(int n) {
-  int sy = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-  int sx = (n % PACKETS_WIDE) * PACKET_WIDTH;
+  int sy, sx;
+  get_packet_pos(n, sx, sy);
 //  int diff = 0;
   for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
     int y = (sy + dy) * WIDTH;
@@ -155,31 +153,24 @@ int frame = 0;
 int new_packets = 0;
 void transmit(const Mat& img) {
   new_packets = 0;
-#ifdef DEBUG_CHUNKS
   updated_chunks.clear();
-#endif
   cvtColor(img, eqa, COLOR_RGB2GRAY);
   for (int n = 0; n < PACKETS; n++) {
     struct Packet p{};
     p.n = n;
     int x, y;
-    y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-    x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+    get_packet_pos(n, x, y);
     if (frame % KEY_FRAME == 0 || !eq(n)) {
-      for (int i = 0; i < img.elemSize(); i++) {
-        int pi = i * PACKET_WIDTH * PACKET_HEIGHT;
-        int ii = i * WIDTH * HEIGHT;
-        for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
-          int py = dy * PACKET_WIDTH;
-          int iy = (y + dy) * WIDTH;
-          for (int dx = 0; dx < PACKET_WIDTH; dx++) {
-            p.data[dx + py + pi] = img.data[x+dx + iy + ii];
-          }
+      for (int dy = 0; dy < PACKET_HEIGHT; dy++) {
+        int py = dy * PACKET_WIDTH;
+        for (int dx = 0; dx < PACKET_WIDTH; dx++) {
+          Pixel pixel = img.at<Pixel>(y + dy, x + dx);
+          p.data[(dx + py) * 3] = pixel.x;
+          p.data[(dx + py) * 3 + 1] = pixel.y;
+          p.data[(dx + py) * 3 + 2] = pixel.z;
         }
-#ifdef DEBUG_CHUNKS
-        updated_chunks.push_back(n);
-#endif
       }
+      updated_chunks.push_back(n);
       p.sum = calc_sum(p);
       enqueue(p);
       new_packets++;
@@ -243,15 +234,15 @@ void run() {
     queued_graph.queue(queued_packets);
     new_graph.queue(new_packets);
     if (show_info) {
-#ifdef DEBUG_CHUNKS
-      for (int n : updated_chunks) {
-        int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
-        int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
-        rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
-                  Scalar(0, 255, 0));
+      if (DEBUG_CHUNKS) {
+        for (int n : updated_chunks) {
+          int y = (n / PACKETS_WIDE) * PACKET_HEIGHT;
+          int x = (n % PACKETS_WIDE) * PACKET_WIDTH;
+          rectangle(display_image, Point2d(x, y), Point2d(x + PACKET_WIDTH, y + PACKET_HEIGHT),
+                    Scalar(0, 255, 0));
+        }
       }
-#endif
-      text(display_image, "[c/d/v] Source, [i] Toggle Overlay", Point(10, 30), 0.5);
+      text(display_image, "[c/d/v] Source, [i] Toggle Overlay, [o] Show Chunk Updates", Point(10, 30), 0.5);
       fps_graph.draw(display_image);
       queued_graph.draw(display_image);
       new_graph.draw(display_image);
@@ -274,6 +265,8 @@ void run() {
     select_frame_source(key);
     if (key == 'i') {
       show_info = !show_info;
+    } else if (key == 'o') {
+      DEBUG_CHUNKS = !DEBUG_CHUNKS;
     }
 
     stop = high_resolution_clock::now();
