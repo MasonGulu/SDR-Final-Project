@@ -161,6 +161,7 @@ void transmit(const Mat& img) {
   new_packets = 0;
   updated_chunks.clear();
   cvtColor(img, eqa, COLOR_RGB2GRAY);
+  std::shuffle(ind, ind + PACKETS, g);
 
   for (int n : ind) {
     struct Packet p{};
@@ -221,7 +222,6 @@ void run() {
   std::random_device rd;
   std::mt19937 g(rd());
   std::iota(ind, ind + PACKETS, 0);
-  std::shuffle(ind, ind + PACKETS, g);
 
   namedWindow("Send Image", WINDOW_AUTOSIZE );
 #ifdef DEBUG_SEND
