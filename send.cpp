@@ -155,6 +155,9 @@ bool eq(int n) {
 
 int ind[PACKETS];
 
+std::random_device rd;
+std::mt19937 g(rd());
+
 int frame = 0;
 int new_packets = 0;
 void transmit(const Mat& img) {
@@ -219,8 +222,6 @@ void run() {
   double locked_fps;
 
   // Initialize random chunk iteration order
-  std::random_device rd;
-  std::mt19937 g(rd());
   std::iota(ind, ind + PACKETS, 0);
 
   namedWindow("Send Image", WINDOW_AUTOSIZE );
