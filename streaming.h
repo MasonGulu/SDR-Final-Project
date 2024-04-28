@@ -6,11 +6,14 @@
 
 #define WIDTH 1280
 #define HEIGHT 720
-#define PACKET_WIDTH 10
-#define PACKET_HEIGHT 10
-#define KEY_FRAME 3000
+#define PACKET_WIDTH 16
+#define PACKET_HEIGHT 16
+#define KEY_FRAME 30
 
-int FPS = 120;
+// Set this to intentionally make 1 in n packets bad
+//#define BAD_PACKETS 10
+
+int FPS = 30;
 int PORT = 1082;
 
 bool DEBUG_CHUNKS = true;
@@ -46,16 +49,25 @@ void text(cv::Mat img, const std::string& text, cv::Point p, float scale) {
 typedef cv::Point3_<uchar> Pixel;
 struct Packet {
     int n;
-    uchar data[PACKET_SIZE * 4];
+    uchar data[PACKET_SIZE * 3];
     int sum;
 };
 
+#if defined(RECEIVE_CPP) && defined(BAD_PACKETS)
+int summed_packets = 0;
+#endif
 int calc_sum(const Packet &p) {
   int sum = 5;
   sum += p.n;
   for (int i = 0; i < PACKET_SIZE; i++) {
     sum += p.data[i];
   }
+#if defined(RECEIVE_CPP) && defined(BAD_PACKETS)
+  summed_packets++;
+  if (summed_packets % BAD_PACKETS == 0) {
+    return -1;
+  }
+#endif
   return sum;
 }
 

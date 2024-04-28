@@ -6,6 +6,9 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <semaphore.h>
+
+#define RECEIVE_CPP
+
 #include "streaming.h"
 #include "parser.h"
 

@@ -8,8 +8,13 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include "streaming.h"
 #include <arpa/inet.h>
+#include <numeric>
+#include <random>
+
+#define SEND_CPP
+
+#include "streaming.h"
 #include "parser.h"
 
 using namespace cv;
@@ -148,6 +153,7 @@ bool eq(int n) {
   return true;
 }
 
+int ind[PACKETS];
 
 int frame = 0;
 int new_packets = 0;
@@ -155,7 +161,8 @@ void transmit(const Mat& img) {
   new_packets = 0;
   updated_chunks.clear();
   cvtColor(img, eqa, COLOR_RGB2GRAY);
-  for (int n = 0; n < PACKETS; n++) {
+
+  for (int n : ind) {
     struct Packet p{};
     p.n = n;
     int x, y;
@@ -209,6 +216,12 @@ void run() {
   double frame_time_ms;
   double fps;
   double locked_fps;
+
+  // Initialize random chunk iteration order
+  std::random_device rd;
+  std::mt19937 g(rd());
+  std::iota(ind, ind + PACKETS, 0);
+  std::shuffle(ind, ind + PACKETS, g);
 
   namedWindow("Send Image", WINDOW_AUTOSIZE );
 #ifdef DEBUG_SEND
